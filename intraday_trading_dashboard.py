@@ -1,103 +1,121 @@
 
 # intraday_trading_dashboard.py
 import streamlit as st
-import yfinance as yf
 import pandas as pd
 import numpy as np
-import datetime as dt
 import requests
 import plotly.graph_objs as go
+from datetime import datetime, timedelta
 
 st.set_page_config(layout="wide")
-st.title("🔍 Intraday Trading Dashboard")
+st.title("🔍 Intraday Trading Dashboard with Signals")
 
-# ---- Functions ----
-def calculate_rsi(data, window=14):
-    delta = data['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+# --- CONFIG ---
+API_KEY = "b7050ef20f2c49efa202154cb3c7a620"
+SYMBOL = "SPY"
+INTERVAL = "5min"
+LIMIT = 300
 
-def calculate_vwap(data):
-    vwap = (data['Volume'] * (data['High'] + data['Low'] + data['Close']) / 3).cumsum() / data['Volume'].cumsum()
-    return vwap
-
-def fetch_data(symbol, interval='5m', period='1d'):
-    df = yf.download(tickers=symbol, interval=interval, period=period)
-    df.dropna(inplace=True)
-    if df.empty:
-        return df
-    df['RSI'] = calculate_rsi(df)
-    df['VWAP'] = calculate_vwap(df)
+# --- Fetch intraday data ---
+@st.cache_data(ttl=300)
+def fetch_intraday_data(symbol):
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval={INTERVAL}&outputsize={LIMIT}&apikey={API_KEY}"
+    r = requests.get(url)
+    data = r.json()
+    if "values" not in data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data["values"])
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df.set_index("datetime", inplace=True)
+    df = df.sort_index()
+    df = df.astype(float)
+    df["VWAP"] = (df["high"] + df["low"] + df["close"]) / 3
+    df["RSI"] = calculate_rsi(df["close"])
     return df
 
-def fetch_vix():
-    vix = yf.download("^VIX", interval="1m", period="1d")
-    if vix.empty:
-        return None
-    return vix['Close'].iloc[-1]
+# --- RSI Function ---
+def calculate_rsi(series, period=14):
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
+    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
-def fetch_put_call_ratio():
-    return 0.91  # Placeholder
-
-def get_spx_levels(df):
-    if df.empty:
-        return None, None, None, None
-    prior_close = df['Close'].iloc[0]
-    high = df['High'].max()
-    low = df['Low'].min()
-    pivot = (high + low + prior_close) / 3
-    return prior_close, high, low, pivot
-
-# ---- Fetch Data ----
-with st.spinner("Loading data..."):
-    spx_df = fetch_data("^GSPC")
-    if spx_df.empty:
-        st.warning("⚠️ SPX data unavailable — falling back to SPY ETF.")
-        spx_df = fetch_data("SPY")
-
-    if spx_df.empty:
-        st.error("⚠️ Neither SPX nor SPY data is available. Please check back later.")
+# --- Signal Detection ---
+def detect_trend(df):
+    window = 10
+    df["slope"] = df["close"].rolling(window).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0])
+    latest_slope = df["slope"].iloc[-1]
+    if latest_slope > 0.2:
+        return "📈 Strong Uptrend"
+    elif latest_slope < -0.2:
+        return "📉 Strong Downtrend"
     else:
-        vix = fetch_vix()
-        vix_display = f"{vix:.2f}" if vix else "N/A"
-        pcr = fetch_put_call_ratio()
-        prior_close, high, low, pivot = get_spx_levels(spx_df)
+        return "🔁 Sideways / Choppy"
 
-        # ---- Pre-market Bias ----
-        bias = "📈 Bullish Bias" if spx_df['Close'].iloc[-1] > prior_close else "📉 Bearish Bias"
+def detect_breakout(df):
+    recent_high = df["high"].iloc[-20:-1].max()
+    latest_price = df["close"].iloc[-1]
+    breakout = latest_price > recent_high
+    return breakout, recent_high
 
-        # ---- Sidebar ----
-        st.sidebar.title("🔢 Market Snapshot")
-        st.sidebar.metric("VIX", vix_display)
-        st.sidebar.metric("Put/Call Ratio", f"{pcr:.2f}")
-        st.sidebar.metric("Pre-market Bias", bias)
-        st.sidebar.markdown("---")
-        st.sidebar.metric("Prior Close", f"{prior_close:.2f}")
-        st.sidebar.metric("Day High", f"{high:.2f}")
-        st.sidebar.metric("Day Low", f"{low:.2f}")
-        st.sidebar.metric("Pivot Point", f"{pivot:.2f}")
+# --- Fetch mock options flow ---
+def get_mock_options_flow():
+    return pd.DataFrame({
+        "Strike": [430, 435, 440, 445],
+        "Calls": [1200, 1800, 950, 700],
+        "Puts": [800, 900, 1600, 1900]
+    })
 
-        # ---- Chart ----
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['Close'], name="Price", line=dict(color="white")))
-        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['VWAP'], name="VWAP", line=dict(color="orange")))
-        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['RSI'], name="RSI", yaxis='y2', line=dict(color="green")))
+# --- Main Dashboard Logic ---
+with st.spinner("Fetching market data..."):
+    df = fetch_intraday_data(SYMBOL)
 
-        fig.update_layout(
-            template="plotly_dark",
-            title="Intraday Chart with VWAP & RSI",
-            xaxis=dict(title="Time"),
-            yaxis=dict(title="Price"),
-            yaxis2=dict(title="RSI", overlaying="y", side="right", range=[0,100]),
-            height=600
-        )
+if df.empty:
+    st.error("Failed to load data from Twelve Data API.")
+else:
+    last_time = df.index[-1]
+    prior_close = df["close"].iloc[0]
+    high = df["high"].max()
+    low = df["low"].min()
+    pivot = (high + low + prior_close) / 3
 
-        st.plotly_chart(fig, use_container_width=True)
+    # Trend & breakout
+    trend = detect_trend(df)
+    breakout, recent_high = detect_breakout(df)
 
-        # ---- Sentiment Panel ----
-        sentiment = "🚀 Risk-On" if vix and vix < 18 and pcr < 1.0 else "⚠️ Risk-Off"
-        st.success(f"Current Sentiment: {sentiment}")
+    # --- Sidebar ---
+    st.sidebar.title("📊 Market Snapshot")
+    st.sidebar.metric("Last Updated", last_time.strftime("%Y-%m-%d %H:%M"))
+    st.sidebar.metric("Prior Close", "{:.2f}".format(prior_close))
+    st.sidebar.metric("Day High", "{:.2f}".format(high))
+    st.sidebar.metric("Day Low", "{:.2f}".format(low))
+    st.sidebar.metric("Pivot Point", "{:.2f}".format(pivot))
+    st.sidebar.metric("Current Trend", trend)
+    if breakout:
+        st.sidebar.success("🚨 Breakout above {:.2f}!".format(recent_high))
+    else:
+        st.sidebar.info("Watching for breakout > {:.2f}".format(recent_high))
 
-        st.caption("Data via Yahoo Finance. For informational use only.")
+    # --- Chart ---
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["close"], name="Close", line=dict(color="white")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["VWAP"], name="VWAP", line=dict(color="orange")))
+    fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI", yaxis="y2", line=dict(color="green")))
+    fig.update_layout(
+        template="plotly_dark",
+        title=f"{SYMBOL} Intraday Chart",
+        xaxis=dict(title="Time"),
+        yaxis=dict(title="Price"),
+        yaxis2=dict(title="RSI", overlaying="y", side="right", range=[0, 100]),
+        height=600
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # --- Options Flow Heatmap ---
+    st.subheader("🔥 Mock Options Flow Heatmap")
+    opt_df = get_mock_options_flow()
+    st.dataframe(opt_df.set_index("Strike"), use_container_width=True)
+
+    st.caption("Real-time data via Twelve Data. Options flow is mock data for now.")
