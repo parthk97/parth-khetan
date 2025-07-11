@@ -26,6 +26,8 @@ def calculate_vwap(data):
 def fetch_data(symbol, interval='5m', period='1d'):
     df = yf.download(tickers=symbol, interval=interval, period=period)
     df.dropna(inplace=True)
+    if df.empty:
+        return df
     df['RSI'] = calculate_rsi(df)
     df['VWAP'] = calculate_vwap(df)
     return df
@@ -41,6 +43,8 @@ def fetch_put_call_ratio():
     return 0.91
 
 def get_spx_levels(df):
+    if df.empty:
+        return None, None, None, None
     prior_close = df['Close'].iloc[0]
     high = df['High'].max()
     low = df['Low'].min()
@@ -50,44 +54,47 @@ def get_spx_levels(df):
 # ---- Fetch Data ----
 with st.spinner("Loading data..."):
     spx_df = fetch_data("^GSPC")
-    vix = fetch_vix()
-    vix_display = f"{vix:.2f}" if vix else "N/A"
-    pcr = fetch_put_call_ratio()
-    prior_close, high, low, pivot = get_spx_levels(spx_df)
+    if spx_df.empty:
+        st.error("⚠️ SPX data is not available at the moment. Please check back later.")
+    else:
+        vix = fetch_vix()
+        vix_display = f"{vix:.2f}" if vix else "N/A"
+        pcr = fetch_put_call_ratio()
+        prior_close, high, low, pivot = get_spx_levels(spx_df)
 
-# ---- Pre-market Bias ----
-bias = "📈 Bullish Bias" if spx_df['Close'].iloc[-1] > prior_close else "📉 Bearish Bias"
+        # ---- Pre-market Bias ----
+        bias = "📈 Bullish Bias" if spx_df['Close'].iloc[-1] > prior_close else "📉 Bearish Bias"
 
-# ---- Sidebar ----
-st.sidebar.title("🔢 Market Snapshot")
-st.sidebar.metric("VIX", vix_display)
-st.sidebar.metric("Put/Call Ratio", f"{pcr:.2f}")
-st.sidebar.metric("Pre-market Bias", bias)
-st.sidebar.markdown("---")
-st.sidebar.metric("Prior Close", f"{prior_close:.2f}")
-st.sidebar.metric("Day High", f"{high:.2f}")
-st.sidebar.metric("Day Low", f"{low:.2f}")
-st.sidebar.metric("Pivot Point", f"{pivot:.2f}")
+        # ---- Sidebar ----
+        st.sidebar.title("🔢 Market Snapshot")
+        st.sidebar.metric("VIX", vix_display)
+        st.sidebar.metric("Put/Call Ratio", f"{pcr:.2f}")
+        st.sidebar.metric("Pre-market Bias", bias)
+        st.sidebar.markdown("---")
+        st.sidebar.metric("Prior Close", f"{prior_close:.2f}")
+        st.sidebar.metric("Day High", f"{high:.2f}")
+        st.sidebar.metric("Day Low", f"{low:.2f}")
+        st.sidebar.metric("Pivot Point", f"{pivot:.2f}")
 
-# ---- Chart ----
-fig = go.Figure()
-fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['Close'], name="SPX Close", line=dict(color="white")))
-fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['VWAP'], name="VWAP", line=dict(color="orange")))
-fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['RSI'], name="RSI", yaxis='y2', line=dict(color="green")))
+        # ---- Chart ----
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['Close'], name="SPX Close", line=dict(color="white")))
+        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['VWAP'], name="VWAP", line=dict(color="orange")))
+        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['RSI'], name="RSI", yaxis='y2', line=dict(color="green")))
 
-fig.update_layout(
-    template="plotly_dark",
-    title="S&P 500 Intraday Chart with VWAP & RSI",
-    xaxis=dict(title="Time"),
-    yaxis=dict(title="Price"),
-    yaxis2=dict(title="RSI", overlaying="y", side="right", range=[0,100]),
-    height=600
-)
+        fig.update_layout(
+            template="plotly_dark",
+            title="S&P 500 Intraday Chart with VWAP & RSI",
+            xaxis=dict(title="Time"),
+            yaxis=dict(title="Price"),
+            yaxis2=dict(title="RSI", overlaying="y", side="right", range=[0,100]),
+            height=600
+        )
 
-st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, use_container_width=True)
 
-# ---- Sentiment Panel ----
-sentiment = "🚀 Risk-On" if vix and vix < 18 and pcr < 1.0 else "⚠️ Risk-Off"
-st.success(f"Current Sentiment: {sentiment}")
+        # ---- Sentiment Panel ----
+        sentiment = "🚀 Risk-On" if vix and vix < 18 and pcr < 1.0 else "⚠️ Risk-Off"
+        st.success(f"Current Sentiment: {sentiment}")
 
-st.caption("Data via Yahoo Finance. For informational use only.")
+        st.caption("Data via Yahoo Finance. For informational use only.")
