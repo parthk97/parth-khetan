@@ -1,3 +1,4 @@
+
 # intraday_trading_dashboard.py
 import streamlit as st
 import yfinance as yf
@@ -31,6 +32,8 @@ def fetch_data(symbol, interval='5m', period='1d'):
 
 def fetch_vix():
     vix = yf.download("^VIX", interval="1m", period="1d")
+    if vix.empty:
+        return None
     return vix['Close'].iloc[-1]
 
 def fetch_put_call_ratio():
@@ -48,6 +51,7 @@ def get_spx_levels(df):
 with st.spinner("Loading data..."):
     spx_df = fetch_data("^GSPC")
     vix = fetch_vix()
+    vix_display = f"{vix:.2f}" if vix else "N/A"
     pcr = fetch_put_call_ratio()
     prior_close, high, low, pivot = get_spx_levels(spx_df)
 
@@ -56,7 +60,7 @@ bias = "📈 Bullish Bias" if spx_df['Close'].iloc[-1] > prior_close else "📉 
 
 # ---- Sidebar ----
 st.sidebar.title("🔢 Market Snapshot")
-st.sidebar.metric("VIX", f"{vix:.2f}")
+st.sidebar.metric("VIX", vix_display)
 st.sidebar.metric("Put/Call Ratio", f"{pcr:.2f}")
 st.sidebar.metric("Pre-market Bias", bias)
 st.sidebar.markdown("---")
@@ -83,7 +87,7 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ---- Sentiment Panel ----
-sentiment = "🚀 Risk-On" if vix < 18 and pcr < 1.0 else "⚠️ Risk-Off"
+sentiment = "🚀 Risk-On" if vix and vix < 18 and pcr < 1.0 else "⚠️ Risk-Off"
 st.success(f"Current Sentiment: {sentiment}")
 
 st.caption("Data via Yahoo Finance. For informational use only.")
