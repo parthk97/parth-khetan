@@ -39,8 +39,7 @@ def fetch_vix():
     return vix['Close'].iloc[-1]
 
 def fetch_put_call_ratio():
-    # Placeholder - use API like Tradier/Barchart for live
-    return 0.91
+    return 0.91  # Placeholder
 
 def get_spx_levels(df):
     if df.empty:
@@ -55,7 +54,11 @@ def get_spx_levels(df):
 with st.spinner("Loading data..."):
     spx_df = fetch_data("^GSPC")
     if spx_df.empty:
-        st.error("⚠️ SPX data is not available at the moment. Please check back later.")
+        st.warning("⚠️ SPX data unavailable — falling back to SPY ETF.")
+        spx_df = fetch_data("SPY")
+
+    if spx_df.empty:
+        st.error("⚠️ Neither SPX nor SPY data is available. Please check back later.")
     else:
         vix = fetch_vix()
         vix_display = f"{vix:.2f}" if vix else "N/A"
@@ -78,13 +81,13 @@ with st.spinner("Loading data..."):
 
         # ---- Chart ----
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['Close'], name="SPX Close", line=dict(color="white")))
+        fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['Close'], name="Price", line=dict(color="white")))
         fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['VWAP'], name="VWAP", line=dict(color="orange")))
         fig.add_trace(go.Scatter(x=spx_df.index, y=spx_df['RSI'], name="RSI", yaxis='y2', line=dict(color="green")))
 
         fig.update_layout(
             template="plotly_dark",
-            title="S&P 500 Intraday Chart with VWAP & RSI",
+            title="Intraday Chart with VWAP & RSI",
             xaxis=dict(title="Time"),
             yaxis=dict(title="Price"),
             yaxis2=dict(title="RSI", overlaying="y", side="right", range=[0,100]),
