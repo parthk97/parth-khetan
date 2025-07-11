@@ -12,6 +12,7 @@ st.title("🔍 Intraday Trading Dashboard with Polygon Options Flow")
 
 # --- CONFIG ---
 POLYGON_API_KEY = "IDmLEeWgFxIdB8byU95SuPX_1lE0iWUr"
+TWELVE_API_KEY = "b7050ef20f2c49efa202154cb3c7a620"
 SYMBOL = "SPY"
 
 # --- RSI Calculation ---
@@ -22,14 +23,19 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- Fetch intraday data (Twelve Data) ---
+# --- Fetch intraday or fallback daily data ---
 @st.cache_data(ttl=300)
 def fetch_intraday_data(symbol):
-    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=5min&outputsize=300&apikey={POLYGON_API_KEY}"
+    url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=5min&outputsize=300&apikey={TWELVE_API_KEY}"
     r = requests.get(url)
     data = r.json()
-    if "values" not in data:
-        return pd.DataFrame()
+    if "values" not in data or not data["values"]:
+        # fallback to daily
+        url = f"https://api.twelvedata.com/time_series?symbol={symbol}&interval=1day&outputsize=2&apikey={TWELVE_API_KEY}"
+        r = requests.get(url)
+        data = r.json()
+        if "values" not in data:
+            return pd.DataFrame()
     df = pd.DataFrame(data["values"])
     df["datetime"] = pd.to_datetime(df["datetime"])
     df.set_index("datetime", inplace=True)
@@ -49,8 +55,9 @@ def fetch_polygon_options_snapshot(symbol):
 
 # --- Signal Detection ---
 def detect_trend(df):
-    window = 10
-    df["slope"] = df["close"].rolling(window).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0])
+    if len(df) < 10:
+        return "⏳ Not enough data"
+    df["slope"] = df["close"].rolling(10).apply(lambda x: np.polyfit(range(len(x)), x, 1)[0])
     latest_slope = df["slope"].iloc[-1]
     if latest_slope > 0.2:
         return "📈 Strong Uptrend"
@@ -60,6 +67,8 @@ def detect_trend(df):
         return "🔁 Sideways / Choppy"
 
 def detect_breakout(df):
+    if len(df) < 20:
+        return False, df["high"].max()
     recent_high = df["high"].iloc[-20:-1].max()
     latest_price = df["close"].iloc[-1]
     breakout = latest_price > recent_high
@@ -71,7 +80,7 @@ with st.spinner("Fetching data..."):
     options_data = fetch_polygon_options_snapshot(SYMBOL)
 
 if df.empty:
-    st.error("Twelve Data intraday data unavailable.")
+    st.error("Twelve Data failed to return intraday or fallback daily data.")
 else:
     last_time = df.index[-1]
     prior_close = df["close"].iloc[0]
@@ -81,7 +90,6 @@ else:
     trend = detect_trend(df)
     breakout, recent_high = detect_breakout(df)
 
-    # Sidebar
     st.sidebar.title("📊 Market Snapshot")
     st.sidebar.metric("Last Updated", last_time.strftime("%Y-%m-%d %H:%M"))
     st.sidebar.metric("Prior Close", "%.2f" % prior_close)
@@ -94,14 +102,13 @@ else:
     else:
         st.sidebar.info("Watching > %.2f" % recent_high)
 
-    # Chart
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df.index, y=df["close"], name="Close", line=dict(color="white")))
     fig.add_trace(go.Scatter(x=df.index, y=df["VWAP"], name="VWAP", line=dict(color="orange")))
     fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI", yaxis="y2", line=dict(color="green")))
     fig.update_layout(
         template="plotly_dark",
-        title="SPY Intraday Chart",
+        title="SPY Chart (Intraday or Latest Daily)",
         xaxis=dict(title="Time"),
         yaxis=dict(title="Price"),
         yaxis2=dict(title="RSI", overlaying="y", side="right", range=[0, 100]),
@@ -109,8 +116,7 @@ else:
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Options Flow
-    st.subheader("🔥 Options Flow (Live from Polygon.io)")
+    st.subheader("🔥 Options Flow (Polygon.io)")
     if not options_data:
         st.warning("No options data available.")
     else:
@@ -128,4 +134,4 @@ else:
         agg = snapshot_df.groupby(["Strike", "Type"]).agg({"Volume": "sum"}).unstack().fillna(0)
         st.dataframe(agg["Volume"], use_container_width=True)
 
-    st.caption("Data: Twelve Data + Polygon.io")
+    st.caption("Data from Twelve Data + Polygon.io")
